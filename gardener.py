@@ -35,9 +35,9 @@ import sys, os.path
 import time
 import datetime
 import gzip
-import urllib.request
 import requests, json
 import schedule
+import logging
 
 def liter_to_time(L,wf): #seconds
     return L/(wf/60.)
@@ -48,7 +48,7 @@ def update_weather_forecast_data(city_id,key,max_tries=60):
     http_status_code = 404
     owm_status_code = "404"
     tries = 0
-    print("Getting weather forecast data from OpenWeatherMap...")
+    logger.info("Getting weather forecast data from OpenWeatherMap...")
     while (owm_status_code == "404" or http_status_code!=200) and tries<max_tries:
         response = requests.get(complete_url)
         http_status_code = response.status_code
@@ -57,7 +57,7 @@ def update_weather_forecast_data(city_id,key,max_tries=60):
             owm_status_code = data["cod"]
         if owm_status_code!="200":
             time.sleep(1.5)
-        print("Try #"+str(tries+1)+" of "+str(max_tries),end="\r")
+        logger.info("Try #"+str(tries+1)+" of "+str(max_tries))
         tries += 1
     try:
         if owm_status_code == "200" and tries<max_tries:
@@ -65,42 +65,45 @@ def update_weather_forecast_data(city_id,key,max_tries=60):
                 json.dump(data,f)
             global last_weather_update
             last_weather_update = time.time()
-            print("Weather forecast data updated.")
+            logger.info("Weather forecast data updated.")
             return 1
         else:
-            print("Failed to update weather forecast data. (http_request code: "+str(http_status_code)+", Owm Code: "+srt(owm_status_code)+")")
+            logger.warning("Warning: Failed to update weather forecast data. (http_request code: "+str(http_status_code)+", Owm Code: "+srt(owm_status_code)+")")
             return 0
     except:
-        print("Failed to write weather forecast data.")
+        logger.error("Error: Failed to write weather forecast data.")
         return 0    
 
 def get_city_codes(url,max_tries=60):
     http_status_code = 404
     tries = 0
-    print("Getting OpenWeatherMap city codes file...")
+    logger.info("Getting OpenWeatherMap city codes file...")
     while http_status_code!=200 and tries<max_tries:
         response = requests.get(url, allow_redirects=True)
         http_status_code = response.status_code
-        print("Try #"+str(tries+1)+" of "+str(max_tries),end="\r")
+        logger.info("Try #"+str(tries+1)+" of "+str(max_tries))
         tries += 1
     if tries>=max_tries:
-        sys.exit("Error: Failed to obtain city codes file from OpenWeatherMap. (http_request code: "+str(http_status_code)+")")
+        logger.critical("Critical Error: Failed to obtain city codes file from OpenWeatherMap. (http_request code: "+str(http_status_code)+")")
+        sys.exit()
     try:
         with open('city.list.json.gz', 'wb') as f:
             f.write(response.content)
-        print("Download done.")
+        logger.info("Download done.")
     except:
-        sys.exit("Error: Failed to write city codes file. Check script permissions.")
+        logger.critical("Critical Error: Failed to write city codes file. Check script permissions.")
+        sys.exit()
 
 def find_city_code(city,country):
-    print("Looking for city ID...")
+    logger.info("Looking for city ID...")
     with gzip.GzipFile("city.list.json.gz", 'r') as fin:
         data = json.loads(fin.read().decode('utf-8'))
     for entry in data:
         if  entry["country"] == country and entry["name"] == city:
-            print(city,country,entry["id"])
+            logger.info(" ".join([str(city),str(country),str(entry["id"])]))
             return entry["id"]
-    sys.exit("Error: City not found.")
+    logger.critical("Critical Error: City not found.")
+    sys.exit()
 
 def read_weather_forecast_data():
     try:
@@ -124,7 +127,7 @@ def read_weather_forecast_data():
             wforecast = forecast
             return 1
     except:
-        print("Warning: Failed to read weather forecast data file.")
+        logger.error("Error: Failed to read weather forecast data file.")
         return 0
 
 def weather_based_irrigation_volume():
@@ -143,7 +146,7 @@ def weather_based_irrigation_volume():
 def irrigate():
     volume = round(weather_based_irrigation_volume(),2)
     irr_time = liter_to_time(volume,water_flux)
-    print("Starting irrigation using "+str(volume)+" liters. It will take "+str(irr_time)+" seconds.")
+    logger.info("Starting irrigation using "+str(volume)+" liters. It will take "+str(irr_time)+" seconds.")
     now = time.time()
     t = now
     print("Irrigating...",end="")
@@ -153,7 +156,7 @@ def irrigate():
         sys.stdout.flush()
         time.sleep(1)
         t = time.time()
-    print("\nIrrigation finished! Happy plants!")
+    logger.info("\nIrrigation finished! Happy plants!")
 
 def weather_update():
     city_id = find_city_code(city,country)
@@ -173,7 +176,7 @@ def read_conf(file_name = "gardener.conf"):
                     elif info[0] in ["watering_times"]:
                         confs[info[0]] = [i.strip() for i in info[1].split(",")]
     except:
-        print("Error: failed to read configuration file. Check if the file \""+file_name+"\" exists.")
+        logger.critical("Critical Error: failed to read configuration file. Check if the file \""+file_name+"\" exists.")
         sys.exit()
     return confs
 
@@ -186,15 +189,21 @@ last_weather_update = 0.
 
 wforecast = {}
 
+
+#Logger
+logger = logging.getLogger('gardener_log')
+logging.basicConfig(filename='gardener.log',level=logging.DEBUG,format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%m/%d/%Y %H:%M:%S')
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+logger.addHandler(ch)
+
+logger.info("Starting Gardener")
+
+logger.info("Reading configuration file...")
+
 conf = read_conf()
 
-print("Starting Gardener")
-
-print("Reading configuration file...")
-
-conf = read_conf()
-
-print("Checking city code file...")
+logger.info("Checking city code file...")
 if not os.path.exists('city.list.json.gz') or not os.path.isfile('city.list.json.gz'):
     get_city_codes(conf["city_codes_url"])
 
@@ -205,15 +214,18 @@ update_weather_forecast_data(city_id,conf["api_key"])
 
 read_weather_forecast_data()
 
-print("Scheduling forecast updates...")
-print("Update weather forecast data every day at "+conf["weather_update_time"]+".")
+logger.info("Scheduling forecast updates...")
+logger.info("Update weather forecast data every day at "+conf["weather_update_time"]+".")
 schedule.every().day.at(conf["weather_update_time"]).do(weather_update)
-print("Scheduling irrigation...")
+logger.info("Scheduling irrigation...")
 for w in conf["watering_times"]:
-    print("Irrigation scheduled for every day at "+w+".")
+    logger.info("Irrigation scheduled for every day at "+w+".")
     schedule.every().day.at(w).do(irrigate)
     
-print("All set. Gardener ready!")
+logger.info("All set. Gardener ready!")
 while True:
     schedule.run_pending()
     time.sleep(10)
+    
+    
+
