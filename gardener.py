@@ -1,4 +1,36 @@
 # -*- coding: utf-8 -*-
+
+"""
+Configuration file example:
+
+# Configuration file to Pi Gardener
+
+#OpenWeatherMaps API key
+api_key = your_api_key_from_OpenWeatherMaps
+
+#City codes file from OWM link (Do not change if it's working)
+city_codes_url = http://bulk.openweathermap.org/sample/city.list.json.gz
+
+#Current city (If city not found, try with/without accents)
+city = Sao Carlos
+
+#Current country two letter code
+country = BR
+
+#Pump flux in L/min
+water_flux = 3. 
+
+#Default volume to irrigation in Liters
+default_water_dispensing = 1.5
+
+#Irrigation times in 24h format separated by commas (eg. 06:00,18:00 )
+watering_times = 06:00,18:00
+
+#Daily time to update weather forecast data
+weather_update_time = 00:01
+
+"""
+
 import sys, os.path
 import time
 import datetime
@@ -12,7 +44,7 @@ def liter_to_time(L,wf): #seconds
 
 def update_weather_forecast_data(city_id,key,max_tries=60):
     base_url = "http://api.openweathermap.org/data/2.5/forecast?"      
-    complete_url = base_url + "appid=" + api_key + "&id=" + str(city_id) + "&units=metric"
+    complete_url = base_url + "appid=" + key + "&id=" + str(city_id) + "&units=metric"
     http_status_code = 404
     owm_status_code = "404"
     tries = 0
@@ -127,49 +159,57 @@ def weather_update():
     city_id = find_city_code(city,country)
     update_weather_forecast_data(city_id,api_key)
 
-api_key = "244ae7f01ff1659446b3834ad0b848fc"
+def read_conf(file_name = "gardener.conf"):
+    confs = {}
+    try:
+        with open(file_name,"r") as f:
+            for line in f.readlines():
+                if len(line) > 1 or line[0]!="#":
+                    info = [i.strip() for i in line.split("=")]
+                    if info[0] in ["api_key","city_codes_url","city","country","weather_update_time"]:
+                        confs[info[0]] = info[1]
+                    elif info[0] in ["water_flux","default_water_dispensing"]:
+                        confs[info[0]] = float(info[1])
+                    elif info[0] in ["watering_times"]:
+                        confs[info[0]] = [i.strip() for i in info[1].split(",")]
+    except:
+        print("Error: failed to read configuration file. Check if the file \""+file_name+"\" exists.")
+        sys.exit()
+    return confs
 
-city_codes_url = "http://bulk.openweathermap.org/sample/city.list.json.gz"
 
-city = "Sao Carlos"
 
-country = "BR"
 
-water_flux = 3. #L/min
-
-default_water_dispensing = 1.5 #Liters
-
-watering_times = ["20:27","20:29"] #24h
-
-weather_update_time = "00:01"
-
+#------------------------------------------------------------------------------
 
 last_weather_update = 0.
 
 wforecast = {}
 
-
+conf = read_conf()
 
 print("Starting Gardener")
 
 print("Reading configuration file...")
 
+conf = read_conf()
+
 print("Checking city code file...")
 if not os.path.exists('city.list.json.gz') or not os.path.isfile('city.list.json.gz'):
-    get_city_codes(city_codes_url)
+    get_city_codes(conf["city_codes_url"])
 
 
-city_id = find_city_code(city,country)
+city_id = find_city_code(conf["city"],conf["country"])
 
-update_weather_forecast_data(city_id,api_key)
+update_weather_forecast_data(city_id,conf["api_key"])
 
 read_weather_forecast_data()
 
 print("Scheduling forecast updates...")
-print("Update weather forecast data every day at "+weather_update_time+".")
-schedule.every().day.at(weather_update_time).do(weather_update)
+print("Update weather forecast data every day at "+conf["weather_update_time"]+".")
+schedule.every().day.at(conf["weather_update_time"]).do(weather_update)
 print("Scheduling irrigation...")
-for w in watering_times:
+for w in conf["watering_times"]:
     print("Irrigation scheduled for every day at "+w+".")
     schedule.every().day.at(w).do(irrigate)
     
