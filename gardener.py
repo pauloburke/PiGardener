@@ -1,12 +1,24 @@
 # -*- coding: utf-8 -*-
 
 """
-Configuration file example:
-
 # Configuration file to Pi Gardener
 
+#Pump flux in L/min
+water_flux = 3. 
+
+#Default volume to irrigation in Liters. It may depends on the type of plant.
+default_water_dispensing = 1.5
+
+#Irrigation times in 24h format separated by commas (eg. 06:00,18:00 )
+watering_times = 06:00,19:51
+
+#----------------------------------------------------------------
+
+#Use weather forecast data? (True/False)
+use_weather_data = True
+
 #OpenWeatherMaps API key
-api_key = your_api_key_from_OpenWeatherMaps
+api_key = insert_your_OWM_API_key
 
 #City codes file from OWM link (Do not change if it's working)
 city_codes_url = http://bulk.openweathermap.org/sample/city.list.json.gz
@@ -16,15 +28,6 @@ city = Sao Carlos
 
 #Current country two letter code
 country = BR
-
-#Pump flux in L/min
-water_flux = 3. 
-
-#Default volume to irrigation in Liters
-default_water_dispensing = 1.5
-
-#Irrigation times in 24h format separated by commas (eg. 06:00,18:00 )
-watering_times = 06:00,18:00
 
 #Daily time to update weather forecast data
 weather_update_time = 00:01
@@ -38,6 +41,13 @@ import gzip
 import requests, json
 import schedule
 import logging
+
+
+
+#Change this function to modify weather based irrigation volume.
+def weather_based_volume_function(default_volume,humidity,temperature):
+    return default_volume*(1.+(1.-(humidity/90.)))*(temperature/25.)
+
 
 def liter_to_time(L,wf): #seconds
     return L/(wf/60.)
@@ -130,6 +140,7 @@ def read_weather_forecast_data():
         logger.error("Error: Failed to read weather forecast data file.")
         return 0
 
+
 def weather_based_irrigation_volume():
     now = time.time()
     if now - last_weather_update > 24*60*60:
@@ -137,15 +148,18 @@ def weather_based_irrigation_volume():
         read_weather_forecast_data()
     today = datetime.date.fromtimestamp(now).day
     if today in wforecast.keys():
-        liters = default_water_dispensing*(1.+(1.-(wforecast[today]["humidity"]/90.)))*(wforecast[today]["temp"]/25.)
+        liters = weather_based_volume_function(conf["default_water_dispensing"],wforecast[today]["humidity"],wforecast[today]["temp"])
         return liters
     else:
-        return default_water_dispensing
+        return conf["default_water_dispensing"]
 
 
-def irrigate():
-    volume = round(weather_based_irrigation_volume(),2)
-    irr_time = liter_to_time(volume,water_flux)
+def irrigate(use_weather):
+    if use_weather:
+        volume = round(weather_based_irrigation_volume(),2)
+    else:
+        volume = conf["default_water_dispensing"]
+    irr_time = liter_to_time(volume,conf["water_flux"])
     logger.info("Starting irrigation using "+str(volume)+" liters. It will take "+str(irr_time)+" seconds.")
     now = time.time()
     t = now
@@ -169,6 +183,8 @@ def read_conf(file_name = "gardener.conf"):
             for line in f.readlines():
                 if len(line) > 1 or line[0]!="#":
                     info = [i.strip() for i in line.split("=")]
+                    if info[0] in ["use_weather_data"]:
+                        confs[info[0]] = info[1]=="True"
                     if info[0] in ["api_key","city_codes_url","city","country","weather_update_time"]:
                         confs[info[0]] = info[1]
                     elif info[0] in ["water_flux","default_water_dispensing"]:
@@ -179,6 +195,7 @@ def read_conf(file_name = "gardener.conf"):
         logger.critical("Critical Error: failed to read configuration file. Check if the file \""+file_name+"\" exists.")
         sys.exit()
     return confs
+
 
 
 
@@ -203,24 +220,26 @@ logger.info("Reading configuration file...")
 
 conf = read_conf()
 
-logger.info("Checking city code file...")
-if not os.path.exists('city.list.json.gz') or not os.path.isfile('city.list.json.gz'):
-    get_city_codes(conf["city_codes_url"])
+if conf["use_weather_data"]:
+    logger.info("Checking city code file...")
+    if not os.path.exists('city.list.json.gz') or not os.path.isfile('city.list.json.gz'):
+        get_city_codes(conf["city_codes_url"])
 
+    city_id = find_city_code(conf["city"],conf["country"])
 
-city_id = find_city_code(conf["city"],conf["country"])
+    update_weather_forecast_data(city_id,conf["api_key"])
 
-update_weather_forecast_data(city_id,conf["api_key"])
+    read_weather_forecast_data()
 
-read_weather_forecast_data()
-
-logger.info("Scheduling forecast updates...")
-logger.info("Update weather forecast data every day at "+conf["weather_update_time"]+".")
-schedule.every().day.at(conf["weather_update_time"]).do(weather_update)
+    logger.info("Scheduling forecast updates...")
+    logger.info("Update weather forecast data every day at "+conf["weather_update_time"]+".")
+    schedule.every().day.at(conf["weather_update_time"]).do(weather_update)
+    
+    
 logger.info("Scheduling irrigation...")
 for w in conf["watering_times"]:
     logger.info("Irrigation scheduled for every day at "+w+".")
-    schedule.every().day.at(w).do(irrigate)
+    schedule.every().day.at(w).do(irrigate,conf["use_weather_data"])
     
 logger.info("All set. Gardener ready!")
 while True:
