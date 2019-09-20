@@ -42,9 +42,11 @@ int check_pump(){
   if(have_water){
     int v = 0;
     digitalWrite(PUMP,HIGH);
+    digitalWrite(LED3,HIGH);
     delay(2000);
     v = readFluxSensor();
     digitalWrite(PUMP,LOW);
+    digitalWrite(LED3,LOW);
     if(v){
       return(1);
     }
@@ -56,12 +58,14 @@ int pump_water(float volume){
   if(have_water){
     float v = 0.0;
     digitalWrite(PUMP,HIGH);
+    digitalWrite(LED3,HIGH);
     while(have_water && v<volume){
       have_water = check_water(water_threshold);
       v += readFluxSensor();
       delay(500);
     }
     digitalWrite(PUMP,LOW);
+    digitalWrite(LED3,LOW);
     if(have_water){
       return(1);
     }    
@@ -79,10 +83,8 @@ void setup() {
   BTserial.begin(baudRate);
 
   have_water = check_water(water_threshold);
-
-
-  //Serial.begin(9600);
-
+  check_pump();
+  
 }
 
 float btReadFloat(){
@@ -101,9 +103,17 @@ void loop() {
 
   if((millis()-last_water_check) > water_check_interval){
     have_water = check_water(water_threshold);
+    if(have_water){
+      digitalWrite(LED2,HIGH);
+    }else{
+      digitalWrite(LED2,LOW);
+    }
   }
   
   if (BTserial.available()){
+    
+    digitalWrite(LED1,HIGH);
+    
     c = BTserial.read();
 
     switch(c){
@@ -144,6 +154,8 @@ void loop() {
         }
     }
     
-  }  
+  }else{
+    digitalWrite(LED1,LOW);
+  }
 
 }
