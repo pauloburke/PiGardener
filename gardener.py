@@ -3,9 +3,6 @@
 """
 # Configuration file to Pi Gardener
 
-#Pump flux in L/min
-water_flux = 3. 
-
 #Default volume to irrigation in Liters. It may depends on the type of plant.
 default_water_dispensing = 1.5
 
@@ -35,12 +32,14 @@ weather_update_time = 00:01
 """
 
 import sys, os.path
+import subprocess
 import time
 import datetime
 import gzip
 import requests, json
 import schedule
 import logging
+import serial
 
 
 
@@ -48,9 +47,6 @@ import logging
 def weather_based_volume_function(default_volume,humidity,temperature):
     return default_volume*(1.+(1.-(humidity/90.)))*(temperature/25.)
 
-
-def liter_to_time(L,wf): #seconds
-    return L/(wf/60.)
 
 def update_weather_forecast_data(city_id,key,max_tries=60):
     base_url = "http://api.openweathermap.org/data/2.5/forecast?"      
@@ -154,23 +150,47 @@ def weather_based_irrigation_volume():
         return conf["default_water_dispensing"]
 
 
-def irrigate(use_weather):
+def irrigate(use_weather,tries=20):
     if use_weather:
         volume = round(weather_based_irrigation_volume(),2)
     else:
         volume = conf["default_water_dispensing"]
-    irr_time = liter_to_time(volume,conf["water_flux"])
-    logger.info("Starting irrigation using "+str(volume)+" liters. It will take "+str(irr_time)+" seconds.")
-    now = time.time()
-    t = now
-    print("Irrigating...",end="")
-    sys.stdout.flush()
-    while (t <= now+irr_time):
-        print(".",end="")
-        sys.stdout.flush()
-        time.sleep(1)
-        t = time.time()
-    logger.info("\nIrrigation finished! Happy plants!")
+    t=0
+    comm = False
+    while t<tries and not comm:
+        comm = check_communication()
+        t+=1
+    if not comm:
+        logger.error("Error: failed to communicate. Pump not checked.")
+        return False
+    try:
+        btcomm.write(("p"+str(round(volume,2))+"\n").encode())
+        rcv = btcomm.readline()
+        if rcv:
+            rcv = rcv.decode("utf-8").rstrip()
+            if rcv != "Pump Ok":
+                logger.error("Error: "+rcv+".")
+                return False
+            else:
+                logger.info(rcv+".")
+        rcv = btcomm.readline()
+        if rcv:
+            rcv = rcv.decode("utf-8").rstrip()
+            logger.info(rcv)
+            logger.info("Starting irrigation using "+str(volume)+" liters.")
+        rcv = btcomm.readline()
+        if rcv:
+            rcv = rcv.decode("utf-8").rstrip()
+            if rcv == "Out of water!":
+                logger.warning("Warning: reservoir out of water.")
+                return False
+            else:
+                logger.info(rcv)
+        logger.info("Irrigation finished! Happy plants!")
+    except:
+        logger.error("Error: failed to irrigate.")
+        return False
+    return True
 
 def weather_update():
     city_id = find_city_code(city,country)
@@ -187,7 +207,7 @@ def read_conf(file_name = "gardener.conf"):
                         confs[info[0]] = info[1]=="True"
                     if info[0] in ["api_key","city_codes_url","city","country","weather_update_time"]:
                         confs[info[0]] = info[1]
-                    elif info[0] in ["water_flux","default_water_dispensing"]:
+                    elif info[0] in ["default_water_dispensing"]:
                         confs[info[0]] = float(info[1])
                     elif info[0] in ["watering_times"]:
                         confs[info[0]] = [i.strip() for i in info[1].split(",")]
@@ -197,8 +217,90 @@ def read_conf(file_name = "gardener.conf"):
     return confs
 
 
+def connect_bluetooth(dev,mac,ch,bdrate,tries=20):
+    mac_found = False
+    t = 0
+    logger.info("Looking for Bluetooth Serial Port...")
+    while not mac_found and t<tries:
+        bashCommand = "rfcomm"
+        process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
+        output, error = process.communicate()
+        if error:
+            logger.error(error)
+        else:
+            comms = output.decode("utf-8").split("\n")
+            mac_found = False
+            for c in comms:
+                if mac in c:
+                    mac_found = True
+                    logger.info("Port found: "+c)
+                    break
+            if not mac_found:
+                logger.info("Port not found. Trying to create... Try "+str(t+1)+"/"+str(tries))
+                bashCommand = " ".join(["rfcomm","bind",dev,mac,str(ch)])
+                process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
+                output, error = process.communicate()
+                t+=1
+                if error:
+                    logger.error(error)
+    if mac_found:
+        port = serial.Serial(dev, baudrate=bdrate)
+        logger.info("Port created.")
+        return port
+    else:
+        logger.critical("Critical Error: failed to create bluetooth serial port.")
+        sys.exit()
+            
+
+def check_communication():
+    logger.info("Testing BT communication...")
+    try:
+        btcomm.write("t\n".encode())
+        rcv = btcomm.readline()
+        if rcv:
+            rcv = rcv.decode("utf-8").rstrip()
+            if rcv == "ok":
+                logger.info("BT communication Ok.")
+                return True
+            else:
+                logger.error("Error: failed to communicate with BT.")
+                return False
+    except:
+        logger.error("Error: failed to communicate with BT.")
+        return False
 
 
+def check_pump(tries=20):
+    t=0
+    comm = False
+    while t<tries and not comm:
+        comm = check_communication()
+        t+=1
+    if not comm:
+        logger.error("Error: failed to communicate. Pump not checked.")
+        return False
+    logger.info("Checking pump...")
+    try:
+        btcomm.write("c\n".encode())
+        rcv = btcomm.readline()
+        if rcv:
+            rcv = rcv.decode("utf-8").rstrip()
+            if rcv == "Pump Ok":
+                logger.info(rcv+".")
+                return True
+            elif rcv == "Pump not Ok":
+                logger.warning("Warning: "+rcv+".")
+                return False
+            else:
+                logger.warning("Warning: Failed checking pump. Try "+str(t+1)+"/"+str(tries))
+                t+=1
+    except:
+        logger.warning("Warning: Bluetooth communication failed. Try "+str(t+1)+"/"+str(tries))
+    #    btcomm=connect_bluetooth("/dev/rfcomm0","98:D3:31:F7:5D:1B",1,9600)
+        t+=1
+    return False
+                
+            
 
 #------------------------------------------------------------------------------
 
@@ -206,6 +308,7 @@ last_weather_update = 0.
 
 wforecast = {}
 
+btcomm = None
 
 #Logger
 logger = logging.getLogger('gardener_log')
@@ -214,11 +317,17 @@ ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 logger.addHandler(ch)
 
+
 logger.info("Starting Gardener")
 
 logger.info("Reading configuration file...")
 
 conf = read_conf()
+
+btcomm = connect_bluetooth("/dev/rfcomm0","98:D3:31:F7:5D:1B",1,9600)
+
+check_pump()
+
 
 if conf["use_weather_data"]:
     logger.info("Checking city code file...")
