@@ -192,9 +192,6 @@ def irrigate(use_weather,tries=20):
         return False
     return True
 
-def weather_update():
-    city_id = find_city_code(city,country)
-    update_weather_forecast_data(city_id,api_key)
 
 def read_conf(file_name = "gardener.conf"):
     confs = {}
@@ -205,12 +202,14 @@ def read_conf(file_name = "gardener.conf"):
                     info = [i.strip() for i in line.split("=")]
                     if info[0] in ["use_weather_data"]:
                         confs[info[0]] = info[1]=="True"
-                    if info[0] in ["api_key","city_codes_url","city","country","weather_update_time"]:
+                    elif info[0] in ["api_key","city_codes_url","city","country","weather_update_time","bt_mac"]:
                         confs[info[0]] = info[1]
                     elif info[0] in ["default_water_dispensing"]:
                         confs[info[0]] = float(info[1])
                     elif info[0] in ["watering_times"]:
                         confs[info[0]] = [i.strip() for i in info[1].split(",")]
+                    elif info[0] in ["bt_channel","bt_device","bt_bdrate"]:
+                        confs[info[0]] = int(info[1])
     except:
         logger.critical("Critical Error: failed to read configuration file. Check if the file \""+file_name+"\" exists.")
         sys.exit()
@@ -324,7 +323,7 @@ logger.info("Reading configuration file...")
 
 conf = read_conf()
 
-btcomm = connect_bluetooth("/dev/rfcomm0","98:D3:31:F7:5D:1B",1,9600)
+btcomm = connect_bluetooth("/dev/rfcomm"+conf['bt_device'],+conf['bt_mac'],+conf['bt_channel'],+conf['bt_bdrate'])
 
 check_pump()
 
@@ -334,15 +333,15 @@ if conf["use_weather_data"]:
     if not os.path.exists('city.list.json.gz') or not os.path.isfile('city.list.json.gz'):
         get_city_codes(conf["city_codes_url"])
 
-    city_id = find_city_code(conf["city"],conf["country"])
+    conf['city_id'] = find_city_code(conf["city"],conf["country"])
 
-    update_weather_forecast_data(city_id,conf["api_key"])
+    update_weather_forecast_data(conf['city_id'],conf["api_key"])
 
     read_weather_forecast_data()
 
     logger.info("Scheduling forecast updates...")
     logger.info("Update weather forecast data every day at "+conf["weather_update_time"]+".")
-    schedule.every().day.at(conf["weather_update_time"]).do(weather_update)
+    schedule.every().day.at(conf["weather_update_time"]).do(update_weather_forecast_data,conf['city_id'],conf["api_key"])
     
     
 logger.info("Scheduling irrigation...")
