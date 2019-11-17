@@ -323,7 +323,7 @@ logger.info("Reading configuration file...")
 
 conf = read_conf()
 
-btcomm = connect_bluetooth("/dev/rfcomm"+conf['bt_device'],+conf['bt_mac'],+conf['bt_channel'],+conf['bt_bdrate'])
+btcomm = connect_bluetooth("/dev/rfcomm"+str(conf['bt_device']),conf['bt_mac'],conf['bt_channel'],conf['bt_bdrate'])
 
 check_pump()
 
